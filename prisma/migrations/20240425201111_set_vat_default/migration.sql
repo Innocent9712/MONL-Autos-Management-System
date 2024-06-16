@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE `Invoice` MODIFY `vat` DECIMAL(6, 1) NULL DEFAULT 0;

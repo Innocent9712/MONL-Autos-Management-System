@@ -113,7 +113,7 @@ class CustomerController {
                         let data: {[key: string]: string | number | null | Date} = {}
                         data = {...customer}
                         if (model_no) {
-                            const vehicle: {[key: string]: number | string | Date | null} = await db.vehicle.create({
+                            const vehicle: {[key: string]: number | string | Date | null | any} = await db.vehicle.create({
                                 data: {
                                     modelNo: model_no,
                                     modelName: model_name,
@@ -122,10 +122,26 @@ class CustomerController {
                                     licensePlate: license_plate,
                                     ownerID: customer.id,
                                     vehicleTypeID: parseInt(vehicle_type_id, 10),
-                                    mileage: parseInt(mileage, 10)
+                                    // mileage: parseInt(mileage, 10)
                                 }
                             })
+
+                            const mil = await db.mileage.create({
+                                data: {
+                                    mileage: parseInt(mileage, 10),
+                                    vehicleID: vehicle.id
+                                }
+                            })
+
+                            await db.ownershipHistory.create({
+                                data: {
+                                    currentOwnerID:  customer.id,
+                                    vehicleID: vehicle.id
+                                }
+                            })
+
                             vehicle["vehichleID"] = vehicle.id
+                            vehicle["mileage"] = [mil]
                             data = {...vehicle, ...data}
                         }
                         res.status(201).json({data, msg: "Customer Created Sucessfully."});
@@ -138,18 +154,16 @@ class CustomerController {
             }
 
     }
-
     async getCustomers(req: Request, res: Response) {
         const page = req.query?.page ? parseInt(req.query.page.toString()) : undefined;
         const limit = req.query?.limit ? parseInt(req.query.limit.toString()) : undefined;
         const startDatetime = req.body?.start;
         const endDatetime = req.body?.end;
-
+        const filterValue = req.query?.filter as string || null;
 
         if ((startDatetime && !endDatetime) || (!startDatetime && endDatetime)) {
             return res.status(400).json({ error_code: 400, msg: 'start and end datetime must be provided' });
         }
-
 
         if ((startDatetime && !isValidDate(startDatetime)) || (endDatetime && !isValidDate(endDatetime))) {
             return res.status(400).json({ error_code: 400, msg: 'Invalid start or end datetime format.' });
@@ -159,44 +173,64 @@ class CustomerController {
             let customers;
             let totalCount;
 
+            const whereFilter: Prisma.CustomerWhereInput = {};
+            if (filterValue) {
+                const parsedFilterValue = parseInt(filterValue);
+                if (!isNaN(parsedFilterValue)) {
+                    whereFilter.OR = [
+                        { customerTypeID: { equals: parsedFilterValue } }, // or { in: [parseInt(filterValue), ...] } if you need multiple types
+                        { companyName: { contains: filterValue } },
+                        { firstName: { contains: filterValue } },
+                    ];
+                } else {
+                    whereFilter.OR = [
+                        { companyName: { contains: filterValue } },
+                        { firstName: { contains: filterValue } },
+                    ];
+                }
+            }
 
             if (page !== undefined && limit !== undefined) {
-            // Pagination is requested
-            totalCount = await db.customer.count();
+                // Pagination is requested
+                totalCount = await db.customer.count({
+                    where: whereFilter,
+                });
 
-            // Retrieve customers with pagination
-            customers = await db.customer.findMany({
-                orderBy: {
-                id: 'asc',
-                },
-                skip: (page - 1) * limit, // Calculate the offset
-                take: limit, // Limit the number of items per page
-            });
+                // Retrieve customers with pagination
+                customers = await db.customer.findMany({
+                    where: whereFilter,
+                    orderBy: {
+                        createdAt: 'desc',
+                    },
+                    skip: (page - 1) * limit, // Calculate the offset
+                    take: limit, // Limit the number of items per page
+                });
 
-            // Check if the number of items returned is less than the specified limit
-            const isLastPage = customers.length < limit;
+                // Check if the number of items returned is less than the specified limit
+                const isLastPage = customers.length < limit;
 
-            res.status(200).json({ data: customers, totalCount, isLastPage });
+                res.status(200).json({ data: customers, totalCount, isLastPage });
             } else {
-            // No pagination
-            const queryOptions: Prisma.CustomerFindManyArgs = {}
-            if (startDatetime && endDatetime) {
-                queryOptions.where = {
-                  createdAt: {
-                    gte: new Date(startDatetime),
-                    lte: new Date(endDatetime),
-                  },
+                // No pagination
+                const queryOptions: Prisma.CustomerFindManyArgs = {
+                    where: {
+                        ...whereFilter,
+                        ...(startDatetime && endDatetime && {
+                            createdAt: {
+                                gte: new Date(startDatetime),
+                                lte: new Date(endDatetime),
+                            },
+                        }),
+                    },
+                    orderBy: {
+                        createdAt: 'desc',
+                    },
                 };
-              }
-            customers = await db.customer.findMany({
-                ...queryOptions,
-                orderBy: {
-                id: 'asc',
-                },
-            });
-            res.status(200).json({ data: customers });
+                customers = await db.customer.findMany(queryOptions);
+                res.status(200).json({ data: customers });
             }
         } catch (error) {
+            console.log(error)
             res.status(400).json({ error_code: 400, msg: 'Could not get customers.' });
         }
     }

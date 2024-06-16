@@ -5,8 +5,10 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// provider = "postgresql"
+
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -32,26 +34,28 @@ model Role {
 }
 
 model Customer {
-  id             Int            @id @default(autoincrement())
-  firstName      String
-  lastName       String
-  otherName      String?
-  email          String         @unique
-  phone          String
-  billingAddress String
-  companyContact String?
-  companyName    String?
-  lga            String?
-  city           String?
-  vehicles       Vehicle[]
-  customerType   CustomerType   @relation(fields: [customerTypeID], references: [id])
-  customerTypeID Int
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-  jobs           Job[]
-  invoices       Invoice[]
-  invoiceDrafts  InvoiceDraft[]
-  estimates      Estimate[]
+  id                       Int                @id @default(autoincrement())
+  firstName                String
+  lastName                 String
+  otherName                String?
+  email                    String             @unique
+  phone                    String
+  billingAddress           String
+  companyContact           String?
+  companyName              String?
+  lga                      String?
+  city                     String?
+  vehicles                 Vehicle[]
+  customerType             CustomerType       @relation(fields: [customerTypeID], references: [id])
+  customerTypeID           Int
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  jobs                     Job[]
+  invoices                 Invoice[]
+  invoiceDrafts            InvoiceDraft[]
+  estimates                Estimate[]
+  previousOwnershipHistory OwnershipHistory[] @relation("previousOwner")
+  currentOwnershipHistory  OwnershipHistory[] @relation("currentOwner")
 }
 
 model CustomerType {
@@ -62,24 +66,46 @@ model CustomerType {
   updatedAt DateTime   @updatedAt
 }
 
+model OwnershipHistory {
+  id              Int       @id @default(autoincrement())
+  previousOwner   Customer? @relation("previousOwner", fields: [previousOwnerID], references: [id], onDelete: SetNull)
+  previousOwnerID Int?
+  currentOwner    Customer? @relation("currentOwner", fields: [currentOwnerID], references: [id], onDelete: SetNull)
+  currentOwnerID  Int?
+  vehicle         Vehicle   @relation(fields: [vehicleID], references: [id], onDelete: Cascade)
+  vehicleID       Int
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
 model Vehicle {
-  id            Int            @id @default(autoincrement())
-  owner         Customer       @relation(fields: [ownerID], references: [id])
-  ownerID       Int
-  modelNo       String?
-  modelName     String
-  engineNo      String?        @unique
-  chasisNo      String         @unique
-  licensePlate  String         @unique
-  mileage       Int
-  vehicleType   VehicleType    @relation(fields: [vehicleTypeID], references: [id])
-  vehicleTypeID Int
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  jobs          Job[]
-  invoices      Invoice[]
-  invoiceDrafts InvoiceDraft[]
-  estimates     Estimate[]
+  id               Int                @id @default(autoincrement())
+  owner            Customer           @relation(fields: [ownerID], references: [id], onDelete: Cascade)
+  ownerID          Int
+  modelNo          String?
+  modelName        String
+  engineNo         String?            @unique
+  chasisNo         String             @unique
+  licensePlate     String             @unique
+  mileage          Mileage[]
+  vehicleType      VehicleType        @relation(fields: [vehicleTypeID], references: [id])
+  vehicleTypeID    Int
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  jobs             Job[]
+  invoices         Invoice[]
+  invoiceDrafts    InvoiceDraft[]
+  estimates        Estimate[]
+  ownerShipHistory OwnershipHistory[]
+}
+
+model Mileage {
+  id        Int      @id @default(autoincrement())
+  vehicle   Vehicle  @relation(fields: [vehicleID], references: [id], onDelete: Cascade)
+  vehicleID Int
+  mileage   Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model VehicleType {
@@ -144,7 +170,8 @@ model Invoice {
   id            Int                  @id @default(autoincrement())
   dueDate       DateTime?
   description   String?
-  invoiceNo     Int                  @default(autoincrement())
+  // invoiceNo     Int                  @default(autoincrement())  // psql
+  invoiceNo     Int                  @unique // mysql
   customer      Customer             @relation(fields: [customerID], references: [id])
   customerID    Int
   jobType       JobType?             @relation(fields: [jobTypeID], references: [id])
@@ -159,7 +186,7 @@ model Invoice {
   serviceCharge Decimal?             @default(0)
   updatedAt     DateTime             @updatedAt
   discountType  DiscountType?
-  vat           Decimal?             @default(7.5) @db.Decimal(6, 1)
+  vat           Decimal?             @default(0) @db.Decimal(6, 1)
   discount      Float?               @default(0)
   createdBy     User?                @relation(name: "createdby", fields: [createdByID], references: [id])
   createdByID   Int?
@@ -229,7 +256,8 @@ model Estimate {
   id            Int                   @id @default(autoincrement())
   dueDate       DateTime?
   description   String?
-  estimateNo    Int                   @default(autoincrement())
+  // estimateNo    Int                   @default(autoincrement()) // psql
+  estimateNo    Int                   @unique // mysql
   customer      Customer              @relation(fields: [customerID], references: [id])
   customerID    Int
   jobType       JobType               @relation(fields: [jobTypeID], references: [id])

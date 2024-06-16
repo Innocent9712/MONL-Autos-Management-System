@@ -29,7 +29,8 @@ class Job  {
             customer_id,
             vehicle_id,
             delivery_date,
-            status
+            status,
+            mileage
         } = req.body
 
         if (
@@ -68,10 +69,34 @@ class Job  {
             // let data: Prisma.JobCreateInput = {}
 
             if (status) data["status"] = status
+            if (mileage) {
+                const latestMilage = await db.mileage.findFirst({
+                    where: {
+                        vehicleID: parseInt(vehicle_id, 10)
+                    },
+                    orderBy: {
+                        createdAt: 'desc'
+                    }
+                })
+        
+                if (latestMilage && latestMilage.mileage > parseInt(mileage, 10)) {
+                    return res.status(400).json({ error_code: 400, msg: 'Cannot decrease mileage.' });
+                }
+
+                await db.mileage.create({
+                    data: {
+                        mileage: parseInt(mileage, 10),
+                        vehicleID: vehicle.id
+                    }
+                })
+            }
 
             const job = await db.job.create({
                 data
             })
+
+            
+
             res.status(201).json({data: job, msg: "Job created successfully."});
         } catch (error) {
             res.status(400).json({ error_code: 400, msg: 'Could not create job.' });
@@ -79,12 +104,16 @@ class Job  {
     }
 
     async getJobs (req: Request, res: Response) {
-        const { customerID } = req.params;
-        const page = req.query?.page ? parseInt(req.query.page.toString()) : undefined;
-        const limit = req.query?.limit ? parseInt(req.query.limit.toString()) : undefined;
+        const customerID = req.query.customerID ? req.query.customerID as string : (req.params.customerID ? req.params.customerID as string : null);
+        const page = Number(req.query.page) || undefined;
+        const limit = Number(req.query.limit) || undefined;
+        const filterValue = req.query?.filter as string || null;
+        const status = req.query?.status as string || null;
         const startDatetime = req.body?.start;
         const endDatetime = req.body?.end;
 
+        const whereFilter: Prisma.JobWhereInput = {};
+    
         if (customerID && isNaN(parseInt(customerID, 10))) {
             return res.status(400).json({ error_code: 400, msg: 'Invalid customer ID.' });
         }
@@ -97,22 +126,95 @@ class Job  {
         if ((startDatetime && !isValidDate(startDatetime)) || (endDatetime && !isValidDate(endDatetime))) {
             return res.status(400).json({ error_code: 400, msg: 'Invalid start or end datetime format.' });
         }
+
+        if (filterValue) {
+            const jobTypeID = await db.jobType.findFirst({
+                where: {
+                    name: { contains: filterValue }
+                },
+                select: {
+                    id: true
+                }
+            })
+            
+            if (customerID) {
+                whereFilter.AND = [
+                    {OR: [{
+                        vehicleID: {
+                            in: await db.vehicle.findMany({
+                                where: {
+                                    licensePlate: { contains: filterValue }
+                                },
+                                select: {
+                                    id: true
+                                },
+                            }).then((vehicleIds) => vehicleIds.map((vehicle) => vehicle.id)),
+                        },
+                    }]},
+                    {customerID: {equals: parseInt(customerID, 10)}},
+                ];
+                if (jobTypeID && whereFilter.AND[0].OR) {
+                    whereFilter.AND[0].OR.push({jobTypeID: {equals: jobTypeID.id}});
+                }
+            } else {
+                whereFilter.OR = [{
+                    vehicleID: {
+                        in: await db.vehicle.findMany({
+                            where: {
+                                licensePlate: { contains: filterValue }
+                            },
+                            select: {
+                                id: true
+                            },
+                        }).then((vehicleIds) => vehicleIds.map((vehicle) => vehicle.id)),
+                    },
+                }]
+                if (jobTypeID) {
+                    whereFilter.OR.push({jobTypeID: {equals: jobTypeID.id}})
+                }
+            }
+        }
+
+        const countFilter = JSON.parse(JSON.stringify(whereFilter));
+
+        if (status && Object.values(JobStatus).some(statusE => status?.toLowerCase().includes(statusE.toLowerCase()))) {
+            whereFilter.status = { in: Object.values(JobStatus).filter(statusE => status?.toLowerCase().includes(statusE.toLowerCase())).map(status => status as JobStatus) }
+        }
+
         
-        let filterOptions: {[key: string]: any} = customerID ? { customerID: parseInt(customerID, 10) } : {};
-        
+        let filterOptions: Prisma.JobWhereInput = customerID ? { AND: [{ customerID: parseInt(customerID, 10) }, whereFilter] } : whereFilter;
+        let countFilterOptions: Prisma.JobWhereInput = customerID ? { AND: [{ customerID: parseInt(customerID, 10) }, countFilter] } : countFilter;
+
         try {
             let jobs;
-            let totalCount;
+            let counts = {};
         
             if (page !== undefined && limit !== undefined) {
             // Pagination is requested
-            totalCount = await db.job.count({
-                where: filterOptions,
-            });
+
+            if (
+                true
+                // !filterOptions.OR?.some(option => 'status' in option) ||
+                // (Array.isArray(filterOptions.AND) && filterOptions.AND.length > 0 && !filterOptions.AND[0].OR?.some(option => 'status' in option))
+            ) {
+                const statusCounts = await db.job.groupBy({
+                    by: ['status'],
+                    where: countFilterOptions,
+                    _count: true,
+                });
+
+                const statusCountsMap = Object.values(JobStatus).reduce((acc, status) => {
+                    acc[status] = statusCounts.find(statusCount => statusCount.status === status)?._count ?? 0;
+                    return acc;
+                }, {} as { [status in JobStatus]: number });
+
+                const totalStatusCounts = Object.values(JobStatus).reduce((acc, status) => acc + (statusCountsMap[status] ?? 0), 0);
+                counts = {...statusCountsMap, TOTAL: totalStatusCounts}
+            }
         
             // Retrieve jobs with pagination
             jobs = await db.job.findMany({
-                where: filterOptions,
+                where: whereFilter,
                 select: {
                 id: true,
                 jobTypeID: true,
@@ -152,9 +254,10 @@ class Job  {
             // Check if the number of items returned is less than the specified limit
             const isLastPage = jobs.length < limit;
         
-            res.status(200).json({ data: jobs, totalCount, isLastPage });
+            res.status(200).json({ data: jobs, counts, isLastPage });
             } else {
             // No pagination
+            let counts = {};
             if (startDatetime && endDatetime) {
                 filterOptions = {
                     ...filterOptions,
@@ -163,7 +266,29 @@ class Job  {
                     lte: new Date(endDatetime),
                   },
                 };
-              }
+            }
+
+            if (
+                true
+                // !filterOptions.OR?.some(option => 'status' in option) ||
+                // (Array.isArray(filterOptions.AND) && filterOptions.AND.length > 0 && !filterOptions.AND[0].OR?.some(option => 'status' in option))
+            ) {
+                const statusCounts = await db.job.groupBy({
+                    by: ['status'],
+                    where: countFilterOptions,
+                    _count: true,
+                });
+
+                const statusCountsMap = Object.values(JobStatus).reduce((acc, status) => {
+                    acc[status] = statusCounts.find(statusCount => statusCount.status === status)?._count ?? 0;
+                    return acc;
+                }, {} as { [status in JobStatus]: number });
+
+                const totalStatusCounts = Object.values(JobStatus).reduce((acc, status) => acc + (statusCountsMap[status] ?? 0), 0);
+
+                counts = {...statusCountsMap, TOTAL: totalStatusCounts}
+            }
+
             jobs = await db.job.findMany({
                 where: filterOptions,
                 select: {
@@ -199,10 +324,10 @@ class Job  {
                 id: 'asc',
                 },
             });
-            res.status(200).json({ data: jobs });
+            res.status(200).json({ data: jobs, counts, msg: "Jobs Fetched Successfully!" });
             }
         } catch (error) {
-            // console.log(error)
+            console.log(error)
             res.status(400).json({ error_code: 400, msg: 'Could not get jobs.' });
         }
     }
@@ -255,7 +380,7 @@ class Job  {
     async updateJob (req: Request, res: Response) {
         // async updateJob (req: Request, res: Response) {
         const { id } = req.params;
-        const {delivery_date, status} = req.body;
+        const {delivery_date, status, mileage} = req.body;
 
         const job = await db.job.findUnique({where: {id: parseInt(id, 10)}})
         if (!job) {
@@ -277,6 +402,15 @@ class Job  {
                 },
                 data
             })
+
+            if (mileage) {
+                await db.mileage.create({
+                    data: {
+                        mileage: parseInt(mileage, 10),
+                        vehicleID: job.vehicleID
+                    }
+                })
+            }
 
             res.status(200).json({data: job, msg: "Job updated successfully."});
         } catch (error) {
@@ -341,11 +475,11 @@ class JobMaterial {
                     where: {
                         productName: {
                             contains: name,
-                            mode: "insensitive",
+                            // mode: "insensitive", // only use in psql
                         },
                     },
                     orderBy: {
-                        id: 'asc',
+                        createdAt: 'desc',
                     },
                 });
     
@@ -356,11 +490,11 @@ class JobMaterial {
                     where: {
                         productName: {
                             contains: name,
-                            mode: "insensitive",
+                            // mode: "insensitive",
                         },
                     },
                     orderBy: {
-                        id: 'asc',
+                        createdAt: 'desc',
                     },
                     skip: (page - 1) * limit, // Calculate the offset
                     take: limit, // Limit the number of items per page
@@ -370,7 +504,7 @@ class JobMaterial {
                     where: {
                         productName: {
                             contains: name,
-                            mode: "insensitive",
+                            // mode: "insensitive",
                         },
                     },
                 });

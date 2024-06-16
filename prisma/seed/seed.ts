@@ -34,10 +34,18 @@ async function seed() {
     });
 
     // Set the starting value of the auto-incremented InvoiceNo and EstimateNo to 100000
-    await db.$queryRaw`ALTER SEQUENCE "Invoice_invoiceNo_seq" RESTART WITH 100000`;
-    await db.$queryRaw`ALTER SEQUENCE "Estimate_estimateNo_seq" RESTART WITH 100000`;
-    await readExcelAndSeedDatabase();
-
+    // // postgres
+    // await db.$queryRaw`ALTER SEQUENCE "Invoice_invoiceNo_seq" RESTART WITH 100000`;
+    // await db.$queryRaw`ALTER SEQUENCE "Estimate_estimateNo_seq" RESTART WITH 100000`;
+    
+    // // mysql
+    // await db.$executeRaw`ALTER TABLE Invoice MODIFY COLUMN invoiceNo INT AUTO_INCREMENT`;
+    // await db.$queryRaw`ALTER TABLE Invoice MODIFY COLUMN Invoice_No INT AUTO_INCREMENT = 100000;`;
+    // await db.$executeRaw`ALTER TABLE Estimate MODIFY COLUMN estimateNo INT AUTO_INCREMENT`;
+    // await db.$queryRaw`ALTER TABLE Estimate MODIFY COLUMN Estimate_No INT AUTO_INCREMENT = 100000;`;
+    
+    // // seed the database with the job materials
+    // await readExcelAndSeedDatabase();
 }
 
 seed()
